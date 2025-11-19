@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://cbt01ofn4x03j"]
+
+[ext_resource type="Script" uid="uid://bs4yhfqgd0iv5" path="res://AiTest.cs" id="1_6qo3l"]
+
+[node name="AiTest" type="Node3D"]
+script = ExtResource("1_6qo3l")

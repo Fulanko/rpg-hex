@@ -28,6 +28,7 @@ size = Vector3(100, 0, 100)
 [node name="PhysicsTest" type="Node3D"]
 script = ExtResource("1_hw8ct")
 DieBodyScene = ExtResource("2_hw8ct")
+NumberOfDice = 25
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource("Environment_hw8ct")

@@ -1,46 +1,66 @@
 using Godot;
-using RPG.Utils;
-using System;
 using System.Collections.Generic;
-using System.Threading.Tasks;
 
 namespace RPG.Dive;
 
 public partial class DieBody : RigidBody3D
 {
-	// Mapping of die face number -> local direction that points out of that face
-	// Assumption: Godot's local axes: +Y = up, +X = right, +Z = forward
-	// Default mapping assumes the die's default orientation has face 6 on +Y (up).
-	// Opposite faces should sum to 7 (standard die): 6<->1, 5<->2, 4<->3
+	[Export]
+	public required AudioStream[] RollSounds { get; set; }
+	[Export]
+	public required AudioStream[] CollisionSounds { get; set; }
+
 	private static readonly Dictionary<int, Vector3> DefaultFaceLocalDirections = new()
 	{
-		{ 6, Vector3.Up },        // top
-		{ 1, -Vector3.Up },       // bottom
-		{ 2, Vector3.Right },     // right
-		{ 5, -Vector3.Right },    // left
-		{ 4, -Vector3.Forward },  // back (choose -Forward so mapping is consistent)
-		{ 3, Vector3.Forward }    // front
+		{ 6, Vector3.Up },
+		{ 1, -Vector3.Up },
+		{ 2, Vector3.Right },
+		{ 5, -Vector3.Right },
+		{ 4, -Vector3.Forward },
+		{ 3, Vector3.Forward }
 	};
+	private MeshInstance3D _mesh = null!;
+	private AudioStreamPlayer3D _audioPlayer = null!;
+	private bool _enabled = false;
 
-	public Quaternion GetCorrectionRotation(Transform3D finalTransform, int desiredTopFace)
+	public override void _Ready()
 	{
-		// Which face actually ended up on top in the simulation?
-		int actualTop = GetTopFaceFromTransform(finalTransform);
-
-		if (actualTop == desiredTopFace)
-			return Quaternion.Identity;
-
-		// World-space direction of actual top
-		Vector3 actualWorld = finalTransform.Basis * DefaultFaceLocalDirections[actualTop];
-
-		// World-space direction of desired top
-		Vector3 desiredWorld = Vector3.Up;
-
-		// Rotation needed to send actual top → desired top
-		return RotationFromTo(actualWorld, desiredWorld);
+		_mesh = GetNode<MeshInstance3D>("%Cube");
+		_audioPlayer = GetNode<AudioStreamPlayer3D>("%AudioPlayer");
 	}
 
-	private int GetTopFaceFromTransform(Transform3D t)
+	public void Enable()
+	{
+		_enabled = true;
+	}
+
+	public void OnBodyEntered(Node other)
+	{
+		if (_enabled && RollSounds.Length > 0 && LinearVelocity.Length() > 0.5f)
+		{
+			float speed = LinearVelocity.Length();
+			if (speed > 0.1f)
+			{
+				if (other is DieBody)
+				{
+					int index = GD.RandRange(0, CollisionSounds.Length - 1);
+					_audioPlayer.Stream = CollisionSounds[index];
+				}
+				else
+				{
+					int index = GD.RandRange(0, RollSounds.Length - 1);
+					_audioPlayer.Stream = RollSounds[index];
+				}
+
+				float volumeFactor = Mathf.Clamp(speed / 10f, 0f, 1f);
+				_audioPlayer.VolumeDb = Mathf.LinearToDb(volumeFactor);
+
+				_audioPlayer.Play();
+			}
+		}
+	}
+
+	public int GetTopFaceFromTransform()
 	{
 		int bestFace = 1;
 		float bestDot = -1f;
@@ -50,7 +70,8 @@ public partial class DieBody : RigidBody3D
 			int face = kv.Key;
 			Vector3 local = kv.Value;
 
-			float dot = (t.Basis * local).Dot(Vector3.Up);
+			// Check which local face vector is most aligned with Global Up
+			float dot = (_mesh.GlobalTransform.Basis * local).Dot(Vector3.Up);
 			if (dot > bestDot)
 			{
 				bestDot = dot;
@@ -61,33 +82,58 @@ public partial class DieBody : RigidBody3D
 		return bestFace;
 	}
 
-	private static Quaternion RotationFromTo(Vector3 from, Vector3 to)
+	public void ReorientMeshForFace(int targetFace)
+	{
+		int currentFace = GetTopFaceFromTransform();
+
+		Quaternion fix = GetRotationToMakeFaceUp(currentFace, targetFace);
+
+		Basis rotBasis = new(fix);
+		Transform3D local = _mesh.Transform;
+
+		// Apply rotation purely to the basis, keeping origin same
+		Transform3D rotTransform = new(rotBasis, Vector3.Zero);
+
+		_mesh.Transform = local * rotTransform;
+	}
+
+	private static Quaternion AlignVectorToVector(Vector3 from, Vector3 to)
 	{
 		from = from.Normalized();
 		to = to.Normalized();
 
 		float dot = from.Dot(to);
 
-		// If vectors are almost identical → no rotation needed
 		if (dot > 0.9999f)
 			return Quaternion.Identity;
 
-		// If vectors are opposite → choose any perpendicular axis
+		// 180 degree turn case
 		if (dot < -0.9999f)
 		{
 			Vector3 axis = from.Cross(Vector3.Right);
-			if (axis.LengthSquared() < 0.0001f)
-				axis = from.Cross(Vector3.Up);
 
-			axis = axis.Normalized();
-			return new Quaternion(axis, Mathf.Pi); // 180 degrees
+			if (axis.LengthSquared() < 0.0001f)
+			{
+				axis = from.Cross(Vector3.Up);
+			}
+
+			return new Quaternion(axis.Normalized(), Mathf.Pi);
 		}
 
-		// General case: use cross product
-		Vector3 axisCross = from.Cross(to);
+		Vector3 cross = from.Cross(to).Normalized();
 		float angle = Mathf.Acos(dot);
-
-		return new Quaternion(axisCross.Normalized(), angle);
+		return new Quaternion(cross, angle);
 	}
 
+	private static Quaternion GetRotationToMakeFaceUp(int currentFace, int targetFace)
+	{
+		if (currentFace == targetFace)
+			return Quaternion.Identity;
+
+		Vector3 currentFaceVec = DefaultFaceLocalDirections[currentFace];
+		Vector3 targetFaceVec = DefaultFaceLocalDirections[targetFace];
+		Quaternion align = AlignVectorToVector(targetFaceVec, currentFaceVec);
+
+		return align.Normalized();
+	}
 }
